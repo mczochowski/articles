@@ -1,6 +1,11 @@
 import numpy as np
 import sympy as sym
 import scipy as sp
+from scipy import stats
+from statsmodels.stats.proportion import proportion_confint
+
+
+### helper functions ###
 
 # fast binomial function (scipy gives floats for some values)
 def binomial(n, k):
@@ -19,29 +24,69 @@ def binomial(n, k):
     else:
         return 0
 
-# distribute identical balls in distinct containers, with no more than (<=) limit balls per container
-def distribute_container_with_limit(balls, containers, limit):
-    # https://math.stackexchange.com/questions/98065/how-many-ways-can-b-balls-be-distributed-in-c-containers-with-no-more-than
-    # https://math.stackexchange.com/questions/1768917/how-many-ways-are-there-to-distribute-26-identical-balls-into-six-distinct-boxes?rq=1
-    res = 0
-    for i in range(0, containers+1):
-        x = (
-            (-1)**i 
-            * binomial(containers, i) 
-            * binomial(balls + containers - 1  - i * (limit + 1), containers - 1)
-        )
-        res += x
-    return res
+
+# coefficients of generating function corresponding to the sharding problem
+def gf_coeffs(n_groups, n_per_group, limit_per_group, total_placed):
+    """
+    Divide black balls into groups of fixed size, with limits of black balls per group
+    n_groups            number of groups
+    n_per_group         max balls total per group (of all colors)
+    limit_per_group     limit of black balls in a particular group (*strict* inequality)
+    total_placed        total number of black balls placed in groups
+    """
+    
+    # get coefficients for a single groups generating function (they are symmetrical)
+    # must be passed in descending order
+    base_coeffs = []
+    for i in range(limit_per_group-1, -1, -1):
+        base_coeffs.append(binomial(n_per_group, i))
+
+    # get coefficient for combined generating function: [x^total_placed](g(x))^n_groups
+    x = sym.symbols("x")
+    gf_base = sym.Poly(base_coeffs, x)
+    comb_coeffs = (gf_base**n_groups).coeffs()
+
+    # coefficients are listed in descending order
+    # We want coefficient of x^total_placed; list includes x^0
+    total_placed_coeff = int(comb_coeffs[-(total_placed+1)])
+
+    return total_placed_coeff
 
 
-N = 1000
-p = 0.15
-K = 150
-S = 10
-n = N//S      # nodes per shard
-a = 1/3
+# calculate years to failure given probability of failure
+def years_to_failure(prob_failure, rounds_per_year):
+    # geometric distribution: number of rounds until failure (i.e. a successful attack)
+    # https://en.wikipedia.org/wiki/Geometric_distribution
+    return (1/prob_failure)/(rounds_per_year)
+
+
+### Define input parameters ###
+
+N = 1000        # total number of nodes
+p = 0.15        # actual Byzantine percentage
+K = int(N*p)    # number of Byzantine nodes
+S = 10          # number of shards
+n = N//S        # nodes per shard (assumes S evenly divides N)
+a = 1/3         # Byzantine fault security limit (alpha)
 t = 100000      # number of trials
 
+
+
+# N = 1500        # total number of nodes
+# p = 0.4         # actual Byzantine percentage
+# K = int(N*p)    # number of Byzantine nodes
+# S = 10          # number of shards
+# n = N//S        # nodes per shard (assumes S evenly divides N)
+# a = 1/2         # Byzantine fault security limit (alpha)
+# t = 100000      # number of trials
+
+
+
+
+
+
+
+### Methodology 1: Simulation ###
 
 # set up array of K bad nodes and N-K good nodes
 nodes = np.array([1]*K + [0]*(N-K))
@@ -65,42 +110,18 @@ for i in range(t):
 pf_bn = trials_bn.sum()/t
 pf_hg = trials_hg.sum()/t
 
-
-CI_width = 1.96*trials_hg.std()/np.sqrt(t)
-
-# Thinking: 
-#   number of successes = number of ways to divide K balls into S bins without exceeding Byz limit
-#   number of possibilities = number of ways to divide K balls into S bins without exceeding N/S
-#   once malicous nodes are assigned, then non-malicious nodes are deterministic
-## pf_cf = 1 - distribute_container_with_limit(K, S, int(a*N/S)-1) / distribute_container_with_limit(K, S, int(N/S)-1)
-## 1 - distribute_container_with_limit(K, S, int(a*N/S)-1) / binomial(N,K)
-
-# geometric distribution: number of trials until failure
-# https://en.wikipedia.org/wiki/Geometric_distribution
-# (1/pf_hg)/(365*2)     # in years to failure
+# Confidence interval (for proportions)
+#https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval
+# CI = proportion_confint(trials_hg.sum(), t, alpha=0.05, method='normal')  # inaccurate for p near 0 or 1
+CI = proportion_confint(trials_hg.sum(), t, alpha=0.05, method='jeffreys')
+CI_width = (CI[1] - CI[0])/2
 
 
 
-### True distribution direct calculation
-# https://math.stackexchange.com/questions/2993130/constrained-combinatorial-question-2-types-of-balls-divided-into-k-groups-with
-def gf_coeffs(n_groups, n_per_group, limit_per_group, total_placed):
-    base_coeffs = []
-    # limit is strict inequality <, not <=
-    for i in range(limit_per_group-1, -1, -1):
-        base_coeffs.append(binomial(n_per_group, i))
 
-    ### NOTE: numpy polynomial expansion leads to integer overflow for large numbers
-    # Wolfram alpha gives correct solution http://www.wolframalpha.com/input/?i=coefficient+of+x%5E25+in+(1%2B10x%2B45x%5E2%2B120x%5E3%2B210x%5E4)%5E10
-    # gf_base = np.poly1d(base_coeffs)
-    # return (gf_base**n_groups).coeffs[-(total_placed+1)]
+### Methodology 2: Analytical calculation ###
 
-    # SymPy
-    x = sym.symbols("x")
-    gf_base = sym.Poly(base_coeffs, x)
-    return int((gf_base**n_groups).coeffs()[-(total_placed+1)])
-
-
-
+# Correct probability directly from 
 n_groups = S
 n_per_group = int(N/S)
 limit_per_group = int(np.ceil(a*N/S))
@@ -109,17 +130,38 @@ num_success = gf_coeffs(n_groups, n_per_group, limit_per_group, total_placed)
 num_total = binomial(N, K)
 pf_cf = 1 - num_success / num_total
 
-ytf = (1/pf_cf)/(365)
+ytf_hg = years_to_failure(pf_cf, 365)
 
-print('Simulated: {prob}'.format(prob=pf_hg))
-print('Analytical: {prob}'.format(prob=pf_cf))
-print('Years to failure: {ytf}'.format(ytf=ytf))
+hg_single = 1 - stats.hypergeom.cdf(int(np.ceil(a*n-1)), N, K, n)
+
 
 # Binomial direct calculation
-## Worst
-bn_single = 1-sp.stats.binom.cdf(int(np.ceil(a*n-1)), n, K/N)
-bn_full = 1-(1-bn_single)**10
+bn_single = 1 - sp.stats.binom.cdf(int(np.ceil(a*n-1)), n, K/N)
+bn_full = 1 - (1 - bn_single)**S
 
-bn_full/pf_cf
+ytf_bn = years_to_failure(bn_full, 365)
 
+
+
+
+
+
+
+
+# Print results
+
+print('\nCorrect: Sampling without replacement (hypergeometric)')
+print('-----------------------------------------------------')
+print('Simulated: {prob}'.format(prob=pf_hg))
+print('Analytical: {prob}'.format(prob=pf_cf))
+print('Analytical (only first shard): {prob}'.format(prob=hg_single))
+print('Years to failure: {ytf}'.format(ytf=ytf_hg))
+
+
+print('\n Incorrect: Sampling with replacement (binomial)')
+print('-----------------------------------------------------')
+print('Simulated: {prob}'.format(prob=pf_bn))
+print('Analytical: {prob}'.format(prob=bn_full))
+print('Analytical (only first shard): {prob}'.format(prob=bn_single))
+print('Years to failure: {ytf}'.format(ytf=ytf_bn))
 
