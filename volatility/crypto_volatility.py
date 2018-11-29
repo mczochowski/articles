@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-###### Pairwise correlations
-
+# Wrapper for CryptoCompare API
 def cryptocompare_history(
         base_url='https://min-api.cryptocompare.com/data/histoday',
         from_symbol = 'BTC',
@@ -32,31 +31,15 @@ def cryptocompare_history(
     ret['Exchange'] = exchange
     ret['Volume'] = ret['volumefrom']
 
-    # # FX
-    # ret['BaseCcy'] = base_ccy
-    # ret = ret.merge(fx_df_merge, how='left', left_on=['Date', 'To'], right_on=['Date', 'Ccy'])
-    # ret = ret.merge(fx_df_merge, how='left', left_on=['Date', 'BaseCcy'], right_on=['Date', 'Ccy'], suffixes = ['_To', '_Base'])
-    # ret['BaseCcyRate'] = (ret['EURRate_To'] / ret['EURRate_Base']).fillna(method='ffill')
-    # ret['OpenBaseCcy'] = ret['open']/ret['BaseCcyRate']
-
-    # ret.set_index('Date', inplace=True)
     return ret
 
 
+# Get top coins
 ret = requests.get('https://min-api.cryptocompare.com/data/top/totalvol?fsym=USD&page=0').json()
 ret = pd.DataFrame(ret['Data'])
-# top_coins = pd.DataFrame(
-#                 [
-#                     (
-#                         ret.iloc[i]['CoinInfo']['Name'], 
-#                         ret.iloc[i]['ConversionInfo']['TotalVolume24H']
-#                     ) 
-#                     for i in range(len(ret))
-#                 ],
-#                 columns=['Name', 'Volume'],
-#             )
 top_coins = [ret.iloc[i]['CoinInfo']['Name'] for i in range(len(ret))]
 
+# Get historical prices for top coins
 px_dfs = []
 
 for sym in top_coins:
