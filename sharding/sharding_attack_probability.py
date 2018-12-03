@@ -3,6 +3,7 @@ import sympy as sym
 import scipy as sp
 from scipy import stats
 from statsmodels.stats.proportion import proportion_confint
+import pandas as pd
 
 
 ### helper functions ###
@@ -68,7 +69,7 @@ K = int(N*p)    # number of Byzantine nodes
 S = 10          # number of shards
 n = N//S        # nodes per shard (assumes S evenly divides N)
 a = 1/3         # Byzantine fault security limit (alpha)
-t = 100000      # number of trials
+t = 10000000    # number of trials
 
 
 
@@ -79,9 +80,6 @@ t = 100000      # number of trials
 # n = N//S        # nodes per shard (assumes S evenly divides N)
 # a = 1/2         # Byzantine fault security limit (alpha)
 # t = 100000      # number of trials
-
-
-
 
 
 
@@ -164,4 +162,63 @@ print('Simulated: {prob}'.format(prob=pf_bn))
 print('Analytical: {prob}'.format(prob=bn_full))
 print('Analytical (only first shard): {prob}'.format(prob=bn_single))
 print('Years to failure: {ytf}'.format(ytf=ytf_bn))
+
+
+
+
+
+### Comparison: Assuming Ethereum Account Distribution ###
+
+# set up array of K bad nodes and N-K good nodes
+nodes = np.array([1]*K + [0]*(N-K))
+indices = np.arange(N)
+
+# Binomial: sampling *with* replacement
+# https://en.wikipedia.org/wiki/Binomial_distribution
+trials_bn = np.full(t, np.nan)
+
+# Hypergeometric: sampling *without* replacement
+# https://en.wikipedia.org/wiki/Hypergeometric_distribution
+trials_hg = np.full(t, np.nan)
+
+# Ethereum account data
+eth = pd.read_excel('./sharding/ethereum_address_balances.xlsx')[['address', 'Eth']]    # top 1000 accounts by balance
+
+eth = eth[:N]
+
+# run t trials
+for i in range(t):
+    if i % 25000 == 0:
+        print(i)
+
+    # randomize malicious and 
+    np.random.shuffle(nodes)
+    # (eth['Eth']*nodes).sum()/eth['Eth'].sum()   # should be near p
+
+    s_bn_i = np.random.choice(indices, size=[S, n], replace=True)
+    s_hg_i = np.random.choice(indices, size=[S, n], replace=False)
+
+    s_bn_num = np.reshape((eth['Eth']*nodes).ix[s_bn_i.flatten()].values, [S,n])
+    s_bn_den = np.reshape((eth['Eth']).ix[s_bn_i.flatten()].values, [S,n])
+    s_bn = s_bn_num.sum(axis=1) / s_bn_den.sum(axis=1)
+
+
+    s_hg_num = np.reshape((eth['Eth']*nodes).ix[s_hg_i.flatten()].values, [S,n])
+    s_hg_den = np.reshape((eth['Eth']).ix[s_hg_i.flatten()].values, [S,n])
+    s_hg = s_hg_num.sum(axis=1) / s_hg_den.sum(axis=1)
+
+
+    trials_bn[i] = ((s_bn >= a).sum() > 0)
+    trials_hg[i] = ((s_hg >= a).sum() > 0)
+
+# failure probabilities
+pf_bn = trials_bn.sum()/t
+pf_hg = trials_hg.sum()/t
+
+# Confidence interval (for proportions)
+#https://en.wikipedia.org/wiki/Binomial_proportion_confidence_interval
+# CI = proportion_confint(trials_hg.sum(), t, alpha=0.05, method='normal')  # inaccurate for p near 0 or 1
+CI = proportion_confint(trials_hg.sum(), t, alpha=0.05, method='jeffreys')
+CI_width = (CI[1] - CI[0])/2
+
 
