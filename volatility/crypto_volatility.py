@@ -35,9 +35,13 @@ def cryptocompare_history(
 
 
 # Get top coins
-ret = requests.get('https://min-api.cryptocompare.com/data/top/totalvol?fsym=USD&page=0').json()
+# ret = requests.get('https://min-api.cryptocompare.com/data/top/totalvol?fsym=USD&page=0').json()
+# ret = pd.DataFrame(ret['Data'])
+# top_coins = [ret.iloc[i]['CoinInfo']['Name'] for i in range(len(ret))]
+ret = requests.get('https://min-api.cryptocompare.com/data/top/volumes?tsym=USD&limit=20').json()
 ret = pd.DataFrame(ret['Data'])
-top_coins = [ret.iloc[i]['CoinInfo']['Name'] for i in range(len(ret))]
+top_coins = ret['SYMBOL'].tolist()
+top_coins.remove('XBTUSD')
 
 # Get historical prices for top coins
 px_dfs = []
@@ -88,3 +92,14 @@ vol1.plot();plt.show()
 # Method 2: exponentially weighted to eliminate noise from data moving out of window
 vol2 = log_rets.ewm(halflife=45, min_periods=30, axis=0).std() * ann_factor 
 vol2.iloc[-365:].plot();plt.show()
+
+
+# BTC Vol
+ax = vol1['BTC'].plot(title='BTC Price Volatility\n(90 day window, annualized)')
+vals = ax.get_yticks()
+ax.set_yticklabels(['{:,.0%}'.format(x) for x in vals])
+plt.show()
+
+
+subset = vol1['BTC'].loc[pd.to_datetime('2015-01-01'):]
+(subset.rank()/len(subset)).plot(title='Percentile Rank of 30 Day Vol Since 2015');plt.show()
